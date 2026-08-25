@@ -97,13 +97,18 @@ inline fun <reified I : Paginated> Server.mcpPaginatedTool(
     crossinline execute: I.() -> Sequence<String>
 ) {
     mcpTool<I>(description, execute = {
-        val seq = execute(this)
-        val paginated = seq.drop(offset).take(count).toList()
+        val all = execute(this).toList()
+        val total = all.size
 
-        if (paginated.isEmpty()) {
-            listOf(TextContent("Reached end of items"))
+        if (total == 0 || offset >= total) {
+            listOf(TextContent("No items found (total: $total)"))
         } else {
-            listOf(TextContent(paginated.joinToString(separator = "\n\n")))
+            val page = all.drop(offset).take(count)
+            val nextOffset = offset + page.size
+            val hasMore = nextOffset < total
+            val header = "[Total: $total | Returned: ${page.size} | Offset: $offset" +
+                (if (hasMore) " | Next offset: $nextOffset]" else " | End of results]")
+            listOf(TextContent(header + "\n\n" + page.joinToString(separator = "\n\n")))
         }
     })
 }
@@ -117,7 +122,11 @@ inline fun Server.mcpTool(
     crossinline execute: () -> List<ContentBlock>
 ) {
     val handler: suspend (ClientConnection, CallToolRequest) -> CallToolResult = { _, _ ->
-        CallToolResult(content = execute(), isError = false)
+        try {
+            CallToolResult(content = execute(), isError = false)
+        } catch (e: Exception) {
+            CallToolResult(content = listOf(TextContent("Error: ${e.message}")), isError = true)
+        }
     }
     addTool(name = name, description = description, inputSchema = ToolSchema(), handler = handler)
 }
@@ -128,7 +137,11 @@ inline fun Server.mcpTool(
     crossinline execute: () -> String
 ) {
     val handler: suspend (ClientConnection, CallToolRequest) -> CallToolResult = { _, _ ->
-        CallToolResult(content = listOf(TextContent(execute())), isError = false)
+        try {
+            CallToolResult(content = listOf(TextContent(execute())), isError = false)
+        } catch (e: Exception) {
+            CallToolResult(content = listOf(TextContent("Error: ${e.message}")), isError = true)
+        }
     }
     addTool(name = name, description = description, inputSchema = ToolSchema(), handler = handler)
 }

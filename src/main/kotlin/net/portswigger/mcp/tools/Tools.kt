@@ -9,6 +9,9 @@ import burp.api.montoya.http.HttpMode
 import burp.api.montoya.http.HttpService
 import burp.api.montoya.http.message.HttpHeader
 import burp.api.montoya.http.message.requests.HttpRequest
+import burp.api.montoya.organizer.OrganizerItem
+import burp.api.montoya.proxy.ProxyHttpRequestResponse
+import burp.api.montoya.proxy.ProxyWebSocketMessage
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
@@ -107,6 +110,82 @@ private fun normalizePrelude(prelude: String): String = prelude
     .replace("\\r", "")        // Remaining literal \r → remove
     .replace("\r", "")          // Actual CR → remove
     .replace("\n", "\r\n")      // All LF → proper CRLF
+
+// ---------------------------------------------------------------------------
+// Filter extension functions — applied before serialisation so we only encode
+// items the caller actually wants.
+// ---------------------------------------------------------------------------
+
+private fun ProxyHttpRequestResponse.matchesFilter(
+    inScopeOnly: Boolean?,
+    hosts: List<String>?,
+    methods: List<String>?,
+    statusCodes: List<Int>?,
+    excludeExtensions: List<String>?,
+    mimeTypes: List<String>?,
+    highlightColor: String?,
+    hasHighlight: Boolean?,
+    editedOnly: Boolean?,
+    hasNotes: Boolean?,
+): Boolean {
+    if (inScopeOnly == true && !request().isInScope()) return false
+    if (!hosts.isNullOrEmpty() && !hosts.any { it.equals(request().httpService().host(), ignoreCase = true) }) return false
+    if (!methods.isNullOrEmpty() && !methods.any { it.equals(request().method(), ignoreCase = true) }) return false
+    if (!statusCodes.isNullOrEmpty()) {
+        if (!hasResponse()) return false
+        val sc = response()?.statusCode()?.toInt() ?: return false
+        if (!statusCodes.contains(sc)) return false
+    }
+    if (!excludeExtensions.isNullOrEmpty()) {
+        val ext = request().fileExtension()
+        if (ext.isNotEmpty() && excludeExtensions.any { it.equals(ext, ignoreCase = true) }) return false
+    }
+    if (!mimeTypes.isNullOrEmpty() && !mimeTypes.any { it.equals(mimeType().name, ignoreCase = true) }) return false
+    if (highlightColor != null && !annotations().highlightColor().name.equals(highlightColor, ignoreCase = true)) return false
+    if (hasHighlight != null && annotations().hasHighlightColor() != hasHighlight) return false
+    if (editedOnly == true && !edited()) return false
+    if (hasNotes != null && annotations().hasNotes() != hasNotes) return false
+    return true
+}
+
+private fun OrganizerItem.matchesFilter(
+    hosts: List<String>?,
+    methods: List<String>?,
+    statusCodes: List<Int>?,
+    highlightColor: String?,
+    hasHighlight: Boolean?,
+    hasNotes: Boolean?,
+): Boolean {
+    if (!hosts.isNullOrEmpty() && !hosts.any { it.equals(request()?.httpService()?.host(), ignoreCase = true) }) return false
+    if (!methods.isNullOrEmpty() && !methods.any { it.equals(request()?.method(), ignoreCase = true) }) return false
+    if (!statusCodes.isNullOrEmpty()) {
+        val sc = response()?.statusCode()?.toInt() ?: return false
+        if (!statusCodes.contains(sc)) return false
+    }
+    if (highlightColor != null && !annotations().highlightColor().name.equals(highlightColor, ignoreCase = true)) return false
+    if (hasHighlight != null && annotations().hasHighlightColor() != hasHighlight) return false
+    if (hasNotes != null && annotations().hasNotes() != hasNotes) return false
+    return true
+}
+
+private fun ProxyWebSocketMessage.matchesFilter(
+    hosts: List<String>?,
+    directionFilter: String?,
+    highlightColor: String?,
+    hasHighlight: Boolean?,
+    hasNotes: Boolean?,
+): Boolean {
+    if (!hosts.isNullOrEmpty() && !hosts.any { it.equals(upgradeRequest().httpService().host(), ignoreCase = true) }) return false
+    if (directionFilter != null && !direction().name.equals(directionFilter, ignoreCase = true)) return false
+    if (highlightColor != null && !annotations().highlightColor().name.equals(highlightColor, ignoreCase = true)) return false
+    if (hasHighlight != null && annotations().hasHighlightColor() != hasHighlight) return false
+    if (hasNotes != null && annotations().hasNotes() != hasNotes) return false
+    return true
+}
+
+// ---------------------------------------------------------------------------
+// Tool registration
+// ---------------------------------------------------------------------------
 
 fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
 
@@ -227,7 +306,7 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
     val toolingDisabledMessage =
         "User has disabled configuration editing. They can enable it in the MCP tab in Burp by selecting 'Enable tools that can edit your config'"
 
-    mcpTool<SetProjectOptions>("Sets project-level configuration in JSON format. This will be merged with existing configuration. Make sure to export before doing this, so you know what the schema is. Make sure the JSON has a top level 'user_options' object!") {
+    mcpTool<SetProjectOptions>("Sets project-level configuration in JSON format. This will be merged with existing configuration. Make sure to export before doing this, so you know what the schema is. Make sure the JSON has a top level 'project_options' object!") {
         if (config.configEditingTooling) {
             api.logging().logToOutput("Setting project-level configuration: $json")
             api.burpSuite().importProjectOptionsFromJson(json)
@@ -238,8 +317,7 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
         }
     }
 
-
-    mcpTool<SetUserOptions>("Sets user-level configuration in JSON format. This will be merged with existing configuration. Make sure to export before doing this, so you know what the schema is. Make sure the JSON has a top level 'project_options' object!") {
+    mcpTool<SetUserOptions>("Sets user-level configuration in JSON format. This will be merged with existing configuration. Make sure to export before doing this, so you know what the schema is. Make sure the JSON has a top level 'user_options' object!") {
         if (config.configEditingTooling) {
             api.logging().logToOutput("Setting user-level configuration: $json")
             api.burpSuite().importUserOptionsFromJson(json)
@@ -251,8 +329,15 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
     }
 
     if (api.burpSuite().version().edition() == BurpSuiteEdition.PROFESSIONAL) {
-        mcpPaginatedTool<GetScannerIssues>("Displays information about issues identified by the scanner") {
+        mcpPaginatedTool<GetScannerIssues>("Displays information about issues identified by the scanner. Returns total count, items returned, and next offset for pagination.") {
             api.siteMap().issues().asSequence().map { Json.encodeToString(it.toSerializableForm()) }
+        }
+
+        mcpTool(
+            "get_scanner_issue_count",
+            "Returns the total number of issues found by the Burp scanner."
+        ) {
+            api.siteMap().issues().size.toString()
         }
 
         val collaboratorClient by lazy { api.collaborator().createClient() }
@@ -297,76 +382,162 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
         }
     }
 
-    mcpPaginatedTool<GetProxyHttpHistory>("Displays items within the proxy HTTP history") {
+    // -----------------------------------------------------------------------
+    // Proxy HTTP history
+    // -----------------------------------------------------------------------
+
+    mcpTool(
+        "get_proxy_history_count",
+        "Returns the total number of items in the proxy HTTP history. Use this before paginating to know the total."
+    ) {
         val allowed = runBlocking {
             checkDataAccessOrDeny(DataAccessType.HTTP_HISTORY, config, api, "HTTP history")
         }
-        if (!allowed) {
-            return@mcpPaginatedTool sequenceOf("HTTP history access denied by Burp Suite")
-        }
-
-        api.proxy().history().asSequence().map { encodeHistoryItem(it.toSerializableForm()) }
+        if (!allowed) return@mcpTool "HTTP history access denied by Burp Suite"
+        api.proxy().history().size.toString()
     }
 
-    mcpPaginatedTool<GetProxyHttpHistoryRegex>("Displays items matching a specified regex within the proxy HTTP history") {
+    mcpPaginatedTool<GetProxyHttpHistory>(
+        "Displays items within the proxy HTTP history. Returns newest items first by default. " +
+        "Supports filtering by: hosts (list of hostnames), methods (e.g. [\"POST\",\"PUT\"]), " +
+        "statusCodes (e.g. [200,401,403]), excludeExtensions (e.g. [\"js\",\"css\",\"png\"]), " +
+        "mimeTypes (e.g. [\"JSON\",\"HTML\"] — MimeType enum names), " +
+        "highlightColor (RED/ORANGE/YELLOW/GREEN/CYAN/BLUE/PINK/MAGENTA/GRAY), " +
+        "hasHighlight (true = any highlight), editedOnly (true = modified by match-replace), " +
+        "hasNotes (true/false), inScopeOnly (true = respect Burp target scope). " +
+        "Response includes total count and next offset for pagination."
+    ) {
         val allowed = runBlocking {
             checkDataAccessOrDeny(DataAccessType.HTTP_HISTORY, config, api, "HTTP history")
         }
-        if (!allowed) {
-            return@mcpPaginatedTool sequenceOf("HTTP history access denied by Burp Suite")
-        }
+        if (!allowed) return@mcpPaginatedTool sequenceOf("HTTP history access denied by Burp Suite")
 
-        val compiledRegex = Pattern.compile(regex)
-        api.proxy().history { it.contains(compiledRegex) }.asSequence()
+        api.proxy().history()
+            .let { list -> if (newestFirst != false) list.asReversed() else list }
+            .filter { it.matchesFilter(inScopeOnly, hosts, methods, statusCodes, excludeExtensions, mimeTypes, highlightColor, hasHighlight, editedOnly, hasNotes) }
+            .asSequence()
             .map { encodeHistoryItem(it.toSerializableForm()) }
     }
 
-    mcpPaginatedTool<GetOrganizerItems>("Displays items within the Organizer tab") {
+    mcpPaginatedTool<GetProxyHttpHistoryRegex>(
+        "Displays proxy HTTP history items whose raw content matches the given regex. " +
+        "Supports caseInsensitive flag and all filters from get_proxy_http_history. " +
+        "Returns newest items first by default."
+    ) {
+        val allowed = runBlocking {
+            checkDataAccessOrDeny(DataAccessType.HTTP_HISTORY, config, api, "HTTP history")
+        }
+        if (!allowed) return@mcpPaginatedTool sequenceOf("HTTP history access denied by Burp Suite")
+
+        val flags = if (caseInsensitive == true) Pattern.CASE_INSENSITIVE else 0
+        val compiledRegex = Pattern.compile(regex, flags)
+
+        api.proxy().history { it.contains(compiledRegex) }
+            .let { list -> if (newestFirst != false) list.asReversed() else list }
+            .filter { it.matchesFilter(inScopeOnly, hosts, methods, statusCodes, excludeExtensions, mimeTypes, highlightColor, hasHighlight, editedOnly, hasNotes) }
+            .asSequence()
+            .map { encodeHistoryItem(it.toSerializableForm()) }
+    }
+
+    // -----------------------------------------------------------------------
+    // Organizer
+    // -----------------------------------------------------------------------
+
+    mcpTool(
+        "get_organizer_count",
+        "Returns the total number of items in the Organizer tab. Use this before paginating to know the total."
+    ) {
         val allowed = runBlocking {
             checkDataAccessOrDeny(DataAccessType.ORGANIZER, config, api, "Organizer")
         }
-        if (!allowed) {
-            return@mcpPaginatedTool sequenceOf("Organizer access denied by Burp Suite")
-        }
-
-        api.organizer().items().asSequence().map { encodeHistoryItem(it.toSerializableForm()) }
+        if (!allowed) return@mcpTool "Organizer access denied by Burp Suite"
+        api.organizer().items().size.toString()
     }
 
-    mcpPaginatedTool<GetOrganizerItemsRegex>("Displays items matching a specified regex within the Organizer tab") {
+    mcpPaginatedTool<GetOrganizerItems>(
+        "Displays items within the Organizer tab. Returns newest items first by default. " +
+        "Supports filtering by: hosts, methods, statusCodes, highlightColor, hasHighlight, hasNotes."
+    ) {
         val allowed = runBlocking {
             checkDataAccessOrDeny(DataAccessType.ORGANIZER, config, api, "Organizer")
         }
-        if (!allowed) {
-            return@mcpPaginatedTool sequenceOf("Organizer access denied by Burp Suite")
-        }
+        if (!allowed) return@mcpPaginatedTool sequenceOf("Organizer access denied by Burp Suite")
 
-        val compiledRegex = Pattern.compile(regex)
-        api.organizer().items { it.contains(compiledRegex) }.asSequence()
+        api.organizer().items()
+            .let { list -> if (newestFirst != false) list.asReversed() else list }
+            .filter { it.matchesFilter(hosts, methods, statusCodes, highlightColor, hasHighlight, hasNotes) }
+            .asSequence()
             .map { encodeHistoryItem(it.toSerializableForm()) }
     }
 
-    mcpPaginatedTool<GetProxyWebsocketHistory>("Displays items within the proxy WebSocket history") {
+    mcpPaginatedTool<GetOrganizerItemsRegex>(
+        "Displays Organizer items whose raw content matches the given regex. " +
+        "Supports caseInsensitive flag and all filters from get_organizer_items."
+    ) {
         val allowed = runBlocking {
-            checkDataAccessOrDeny(DataAccessType.WEBSOCKET_HISTORY, config, api, "WebSocket history")
+            checkDataAccessOrDeny(DataAccessType.ORGANIZER, config, api, "Organizer")
         }
-        if (!allowed) {
-            return@mcpPaginatedTool sequenceOf("WebSocket history access denied by Burp Suite")
-        }
+        if (!allowed) return@mcpPaginatedTool sequenceOf("Organizer access denied by Burp Suite")
 
-        api.proxy().webSocketHistory().asSequence()
+        val flags = if (caseInsensitive == true) Pattern.CASE_INSENSITIVE else 0
+        val compiledRegex = Pattern.compile(regex, flags)
+
+        api.organizer().items { it.contains(compiledRegex) }
+            .let { list -> if (newestFirst != false) list.asReversed() else list }
+            .filter { it.matchesFilter(hosts, methods, statusCodes, highlightColor, hasHighlight, hasNotes) }
+            .asSequence()
             .map { encodeHistoryItem(it.toSerializableForm()) }
     }
 
-    mcpPaginatedTool<GetProxyWebsocketHistoryRegex>("Displays items matching a specified regex within the proxy WebSocket history") {
+    // -----------------------------------------------------------------------
+    // Proxy WebSocket history
+    // -----------------------------------------------------------------------
+
+    mcpTool(
+        "get_websocket_history_count",
+        "Returns the total number of items in the proxy WebSocket history. Use this before paginating to know the total."
+    ) {
         val allowed = runBlocking {
             checkDataAccessOrDeny(DataAccessType.WEBSOCKET_HISTORY, config, api, "WebSocket history")
         }
-        if (!allowed) {
-            return@mcpPaginatedTool sequenceOf("WebSocket history access denied by Burp Suite")
-        }
+        if (!allowed) return@mcpTool "WebSocket history access denied by Burp Suite"
+        api.proxy().webSocketHistory().size.toString()
+    }
 
-        val compiledRegex = Pattern.compile(regex)
-        api.proxy().webSocketHistory { it.contains(compiledRegex) }.asSequence()
+    mcpPaginatedTool<GetProxyWebsocketHistory>(
+        "Displays items within the proxy WebSocket history. Returns newest items first by default. " +
+        "Supports filtering by: hosts (upgrade request hostname), " +
+        "direction (CLIENT_TO_SERVER or SERVER_TO_CLIENT), " +
+        "highlightColor, hasHighlight, hasNotes."
+    ) {
+        val allowed = runBlocking {
+            checkDataAccessOrDeny(DataAccessType.WEBSOCKET_HISTORY, config, api, "WebSocket history")
+        }
+        if (!allowed) return@mcpPaginatedTool sequenceOf("WebSocket history access denied by Burp Suite")
+
+        api.proxy().webSocketHistory()
+            .let { list -> if (newestFirst != false) list.asReversed() else list }
+            .filter { it.matchesFilter(hosts, direction, highlightColor, hasHighlight, hasNotes) }
+            .asSequence()
+            .map { encodeHistoryItem(it.toSerializableForm()) }
+    }
+
+    mcpPaginatedTool<GetProxyWebsocketHistoryRegex>(
+        "Displays proxy WebSocket history items whose raw content matches the given regex. " +
+        "Supports caseInsensitive flag and all filters from get_proxy_websocket_history."
+    ) {
+        val allowed = runBlocking {
+            checkDataAccessOrDeny(DataAccessType.WEBSOCKET_HISTORY, config, api, "WebSocket history")
+        }
+        if (!allowed) return@mcpPaginatedTool sequenceOf("WebSocket history access denied by Burp Suite")
+
+        val flags = if (caseInsensitive == true) Pattern.CASE_INSENSITIVE else 0
+        val compiledRegex = Pattern.compile(regex, flags)
+
+        api.proxy().webSocketHistory { it.contains(compiledRegex) }
+            .let { list -> if (newestFirst != false) list.asReversed() else list }
+            .filter { it.matchesFilter(hosts, direction, highlightColor, hasHighlight, hasNotes) }
+            .asSequence()
             .map { encodeHistoryItem(it.toSerializableForm()) }
     }
 
@@ -506,24 +677,99 @@ data class SetActiveEditorContents(val text: String)
 @Serializable
 data class GetScannerIssues(override val count: Int, override val offset: Int) : Paginated
 
-@Serializable
-data class GetProxyHttpHistory(override val count: Int, override val offset: Int) : Paginated
+// ---------------------------------------------------------------------------
+// History data classes — filter fields are all nullable (optional in schema)
+// ---------------------------------------------------------------------------
 
 @Serializable
-data class GetProxyHttpHistoryRegex(val regex: String, override val count: Int, override val offset: Int) : Paginated
+data class GetProxyHttpHistory(
+    override val count: Int,
+    override val offset: Int,
+    val newestFirst: Boolean? = null,
+    val inScopeOnly: Boolean? = null,
+    val hosts: List<String>? = null,
+    val methods: List<String>? = null,
+    val statusCodes: List<Int>? = null,
+    val excludeExtensions: List<String>? = null,
+    val mimeTypes: List<String>? = null,
+    val highlightColor: String? = null,
+    val hasHighlight: Boolean? = null,
+    val editedOnly: Boolean? = null,
+    val hasNotes: Boolean? = null,
+) : Paginated
 
 @Serializable
-data class GetOrganizerItems(override val count: Int, override val offset: Int) : Paginated
+data class GetProxyHttpHistoryRegex(
+    val regex: String,
+    override val count: Int,
+    override val offset: Int,
+    val caseInsensitive: Boolean? = null,
+    val newestFirst: Boolean? = null,
+    val inScopeOnly: Boolean? = null,
+    val hosts: List<String>? = null,
+    val methods: List<String>? = null,
+    val statusCodes: List<Int>? = null,
+    val excludeExtensions: List<String>? = null,
+    val mimeTypes: List<String>? = null,
+    val highlightColor: String? = null,
+    val hasHighlight: Boolean? = null,
+    val editedOnly: Boolean? = null,
+    val hasNotes: Boolean? = null,
+) : Paginated
 
 @Serializable
-data class GetOrganizerItemsRegex(val regex: String, override val count: Int, override val offset: Int) : Paginated
+data class GetOrganizerItems(
+    override val count: Int,
+    override val offset: Int,
+    val newestFirst: Boolean? = null,
+    val hosts: List<String>? = null,
+    val methods: List<String>? = null,
+    val statusCodes: List<Int>? = null,
+    val highlightColor: String? = null,
+    val hasHighlight: Boolean? = null,
+    val hasNotes: Boolean? = null,
+) : Paginated
 
 @Serializable
-data class GetProxyWebsocketHistory(override val count: Int, override val offset: Int) : Paginated
+data class GetOrganizerItemsRegex(
+    val regex: String,
+    override val count: Int,
+    override val offset: Int,
+    val caseInsensitive: Boolean? = null,
+    val newestFirst: Boolean? = null,
+    val hosts: List<String>? = null,
+    val methods: List<String>? = null,
+    val statusCodes: List<Int>? = null,
+    val highlightColor: String? = null,
+    val hasHighlight: Boolean? = null,
+    val hasNotes: Boolean? = null,
+) : Paginated
 
 @Serializable
-data class GetProxyWebsocketHistoryRegex(val regex: String, override val count: Int, override val offset: Int) :
-    Paginated
+data class GetProxyWebsocketHistory(
+    override val count: Int,
+    override val offset: Int,
+    val newestFirst: Boolean? = null,
+    val hosts: List<String>? = null,
+    val direction: String? = null,
+    val highlightColor: String? = null,
+    val hasHighlight: Boolean? = null,
+    val hasNotes: Boolean? = null,
+) : Paginated
+
+@Serializable
+data class GetProxyWebsocketHistoryRegex(
+    val regex: String,
+    override val count: Int,
+    override val offset: Int,
+    val caseInsensitive: Boolean? = null,
+    val newestFirst: Boolean? = null,
+    val hosts: List<String>? = null,
+    val direction: String? = null,
+    val highlightColor: String? = null,
+    val hasHighlight: Boolean? = null,
+    val hasNotes: Boolean? = null,
+) : Paginated
 
 @Serializable
 data class GenerateCollaboratorPayload(

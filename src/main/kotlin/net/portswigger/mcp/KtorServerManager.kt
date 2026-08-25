@@ -138,9 +138,9 @@ class KtorServerManager(private val api: MontoyaApi) : ServerManager {
     private fun isValidOrigin(origin: String): Boolean {
         try {
             val url = URI(origin).toURL()
-            val hostname = url.host.lowercase()
+            val hostname = url.host.lowercase().trimStart('[').trimEnd(']')
 
-            val allowedHosts = setOf("localhost", "127.0.0.1")
+            val allowedHosts = setOf("localhost", "127.0.0.1", "::1")
 
             return hostname in allowedHosts
         } catch (_: Exception) {
@@ -161,11 +161,9 @@ class KtorServerManager(private val api: MontoyaApi) : ServerManager {
 
     private fun isValidHost(host: String, expectedPort: Int): Boolean {
         try {
-            val parts = host.split(":")
-            val hostname = parts[0].lowercase()
-            val port = if (parts.size > 1) parts[1].toIntOrNull() else null
+            val (hostname, port) = parseHostHeader(host)
 
-            val allowedHosts = setOf("localhost", "127.0.0.1")
+            val allowedHosts = setOf("localhost", "127.0.0.1", "::1")
             if (hostname !in allowedHosts) {
                 return false
             }
@@ -180,12 +178,28 @@ class KtorServerManager(private val api: MontoyaApi) : ServerManager {
         }
     }
 
+    private fun parseHostHeader(host: String): Pair<String, Int?> {
+        return if (host.startsWith("[")) {
+            // IPv6: [::1] or [::1]:9876
+            val closeBracket = host.indexOf(']')
+            if (closeBracket < 0) throw IllegalArgumentException("Invalid IPv6 host header: $host")
+            val h = host.substring(1, closeBracket).lowercase()
+            val p = if (closeBracket + 1 < host.length && host[closeBracket + 1] == ':')
+                host.substring(closeBracket + 2).toIntOrNull()
+            else null
+            h to p
+        } else {
+            val parts = host.split(":")
+            parts[0].lowercase() to (if (parts.size == 2) parts[1].toIntOrNull() else null)
+        }
+    }
+
     private fun isValidReferer(referer: String): Boolean {
         try {
             val url = URI(referer).toURL()
-            val hostname = url.host.lowercase()
+            val hostname = url.host.lowercase().trimStart('[').trimEnd(']')
 
-            val allowedHosts = setOf("localhost", "127.0.0.1")
+            val allowedHosts = setOf("localhost", "127.0.0.1", "::1")
             return hostname in allowedHosts
 
         } catch (_: Exception) {
