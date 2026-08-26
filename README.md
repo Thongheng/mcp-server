@@ -1,148 +1,138 @@
-# Burp Suite MCP Server Extension
+# Burp Suite MCP Server
 
-## Overview
+Integrates Burp Suite with AI clients (Claude, Cursor, etc.) using the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). The extension runs a local MCP server inside Burp, exposing Burp's data and actions as tools that AI assistants can call directly.
 
-Integrate Burp Suite with AI Clients using the Model Context Protocol (MCP).
-
-For more information about the protocol visit: [modelcontextprotocol.io](https://modelcontextprotocol.io/)
-
-## Features
-
-- Connect Burp Suite to AI clients through MCP
-- Automatic installation for Claude Desktop
-- Comes with packaged Stdio MCP proxy server
-
-## Usage
-
-- Install the extension in Burp Suite
-- Configure your Burp MCP server in the extension settings
-- Configure your MCP client to use the Burp SSE MCP server or stdio proxy
-- Interact with Burp through your client!
+---
 
 ## Installation
 
-### Prerequisites
+1. Build: `./gradlew embedProxyJar` → produces `build/libs/burp-mcp-all.jar`
+2. Load the JAR as a Burp extension (Extensions → Add → Java)
+3. Configure the MCP tab in Burp (host, port, approvals)
+4. Point your AI client at `http://127.0.0.1:9876/sse`
 
-Ensure that the following prerequisites are met before building and installing the extension:
+---
 
-1. **Java**: Java must be installed and available in your system's PATH. You can verify this by running `java --version` in your terminal.
-2. **jar Command**: The `jar` command must be executable and available in your system's PATH. You can verify this by running `jar --version` in your terminal. This is required for building and installing the extension.
+## Available Tools
 
-### Building the Extension
+### HTTP Requests
 
-1. **Clone the Repository**: Obtain the source code for the MCP Server Extension.
-   ```
-   git clone https://github.com/PortSwigger/mcp-server.git
-   ```
+| Tool | Description |
+|------|-------------|
+| `send_http1_request` | Send an HTTP/1.1 request and return the response. Params: `content`, `targetHostname`, `targetPort`, `usesHttps` |
+| `send_http2_request` | Send an HTTP/2 request and return the response. Params: `pseudoHeaders` (map), `headers` (map), `requestBody`, `targetHostname`, `targetPort`, `usesHttps` |
 
-2. **Navigate to the Project Directory**: Move into the project's root directory.
-   ```
-   cd mcp-server
-   ```
+### Repeater & Intruder
 
-3. **Build the JAR File**: Use Gradle to build the extension.
-   ```
-   ./gradlew embedProxyJar
-   ```
+| Tool | Description |
+|------|-------------|
+| `create_repeater_tab` | Create an HTTP/1.1 Repeater tab. Params: `content`, `targetHostname`, `targetPort`, `usesHttps`, `tabName` (optional) |
+| `create_repeater_tab_http2` | Create an HTTP/2 Repeater tab. Params: `pseudoHeaders`, `headers`, `requestBody`, `targetHostname`, `targetPort`, `usesHttps`, `tabName` (optional) |
+| `send_to_intruder` | Send a request to Intruder. Params: `content`, `targetHostname`, `targetPort`, `usesHttps`, `tabName` (optional) |
 
-   This command compiles the source code and packages it into a JAR file located in `build/libs/burp-mcp-all.jar`.
+### Proxy HTTP History
 
-### Loading the Extension into Burp Suite
+| Tool | Description |
+|------|-------------|
+| `get_proxy_history_count` | Return the total number of items in the proxy HTTP history. |
+| `get_proxy_http_history` | Return proxy HTTP history items with pagination and optional filters (see [Filters](#filters)). |
+| `get_proxy_http_history_regex` | Return proxy HTTP history items whose raw content matches a regex. Params: `regex`, `caseInsensitive` (optional), plus all filters. |
 
-1. **Open Burp Suite**: Launch your Burp Suite application.
-2. **Access the Extensions Tab**: Navigate to the `Extensions` tab.
-3. **Add the Extension**:
-    - Click on `Add`.
-    - Set `Extension Type` to `Java`.
-    - Click `Select file ...` and choose the JAR file built in the previous step.
-    - Click `Next` to load the extension.
+### WebSocket History
 
-Upon successful loading, the MCP Server Extension will be active within Burp Suite.
+| Tool | Description |
+|------|-------------|
+| `get_websocket_history_count` | Return the total number of items in the proxy WebSocket history. |
+| `get_proxy_websocket_history` | Return WebSocket history items. Params: `count`, `offset`, `newestFirst`, `hosts`, `direction` (`CLIENT_TO_SERVER` or `SERVER_TO_CLIENT`), `highlightColor`, `hasHighlight`, `hasNotes` |
+| `get_proxy_websocket_history_regex` | Return WebSocket history items matching a regex. Params: `regex`, `caseInsensitive`, plus all WebSocket filters. |
 
-## Configuration
+### Organizer
 
-### Configuring the Extension
-Configuration for the extension is done through the Burp Suite UI in the `MCP` tab.
-- **Toggle the MCP Server**: The `Enabled` checkbox controls whether the MCP server is active.
-- **Enable config editing**: The `Enable tools that can edit your config` checkbox allows the MCP server to expose tools which can edit Burp configuration files.
-- **Advanced options**: You can configure the port and host for the MCP server. By default, it listens on `http://127.0.0.1:9876`.
+| Tool | Description |
+|------|-------------|
+| `get_organizer_count` | Return the total number of items in the Organizer tab. |
+| `get_organizer_items` | Return Organizer items with pagination and filters. Params: `count`, `offset`, `newestFirst`, `hosts`, `methods`, `statusCodes`, `highlightColor`, `hasHighlight`, `hasNotes` |
+| `get_organizer_items_regex` | Return Organizer items matching a regex. Params: `regex`, `caseInsensitive`, plus all Organizer filters. |
 
-### Claude Desktop Client
+### Scanner *(Burp Pro only)*
 
-To fully utilize the MCP Server Extension with Claude, you need to configure your Claude client settings appropriately.
-The extension has an installer which will automatically configure the client settings for you.
+| Tool | Description |
+|------|-------------|
+| `get_scanner_issue_count` | Return the total number of issues found by the Burp scanner. |
+| `get_scanner_issues` | Return scanner issues with pagination. Params: `count`, `offset` |
 
-1. Currently, Claude Desktop only support STDIO MCP Servers
-   for the service it needs.
-   This approach isn't ideal for desktop apps like Burp, so instead, Claude will start a proxy server that points to the
-   Burp instance,  
-   which hosts a web server at a known port (`localhost:9876`).
+### Collaborator *(Burp Pro only)*
 
-2. **Configure Claude to use the Burp MCP server**  
-   You can do this in one of two ways:
+| Tool | Description |
+|------|-------------|
+| `generate_collaborator_payload` | Generate a Burp Collaborator payload for OOB testing. Params: `customData` (optional). Returns payload URL and ID. |
+| `get_collaborator_interactions` | Poll Collaborator for DNS/HTTP/SMTP interactions. Params: `payloadId` (optional — omit to get all interactions) |
 
-    - **Option 1: Run the installer from the extension**
-      This will add the Burp MCP server to the Claude Desktop config.
+### Burp Configuration
 
-    - **Option 2: Manually edit the config file**  
-      Open the file located at `~/Library/Application Support/Claude/claude_desktop_config.json`,
-      and replace or update it with the following:
-      ```json
-      {
-        "mcpServers": {
-          "burp": {
-            "command": "<path to Java executable packaged with Burp>",
-            "args": [
-                "-jar",
-                "/path/to/mcp/proxy/jar/mcp-proxy-all.jar",
-                "--sse-url",
-                "<your Burp MCP server URL configured in the extension>"
-            ]
-          }
-        }
-      }
-      ```
+| Tool | Description |
+|------|-------------|
+| `output_project_options` | Export current project-level options as JSON. |
+| `output_user_options` | Export current user-level options as JSON. |
+| `set_project_options` | Merge JSON into project-level options. Requires *Enable tools that can edit your config*. Param: `json` (must have top-level `project_options` key) |
+| `set_user_options` | Merge JSON into user-level options. Requires *Enable tools that can edit your config*. Param: `json` (must have top-level `user_options` key) |
 
-3. **Restart Claude Desktop** - assuming Burp is running with the extension loaded.
+### Burp Controls
 
-## Manual installations
-If you want to install the MCP server manually you can either use the extension's SSE server directly or the packaged
-Stdio proxy server.
+| Tool | Description |
+|------|-------------|
+| `set_task_execution_engine_state` | Pause or unpause Burp's task execution engine. Param: `running` (boolean) |
+| `set_proxy_intercept_state` | Enable or disable Burp Proxy intercept. Param: `intercepting` (boolean) |
 
-### SSE MCP Server
-To use the SSE server directly, provide the configured server URL to your MCP client:
-```
-http://127.0.0.1:9876
-```
+### Editor
 
-### Stdio MCP Proxy Server
-The source code for the proxy server can be found here: [MCP Proxy Server](https://github.com/PortSwigger/mcp-proxy)
+| Tool | Description |
+|------|-------------|
+| `get_active_editor_contents` | Return the text content of the currently focused Burp message editor. |
+| `set_active_editor_contents` | Set the text content of the currently focused Burp message editor. Param: `text` |
 
-In order to support MCP Clients which only support Stdio MCP Servers, the extension comes packaged with a proxy server for
-passing requests to the SSE MCP server extension.
+### Utilities
 
-If you want to use the Stdio proxy server you can use the extension's installer option to extract the proxy server jar.
-Once you have the jar you can add the following command and args to your client configuration:
-```
-/path/to/packaged/burp/java -jar /path/to/proxy/jar/mcp-proxy-all.jar --sse-url http://127.0.0.1:9876
-```
+| Tool | Description |
+|------|-------------|
+| `url_encode` | URL-encode a string. Param: `content` |
+| `url_decode` | URL-decode a string. Param: `content` |
+| `base64_encode` | Base64-encode a string. Param: `content` |
+| `base64_decode` | Base64-decode a string. Param: `content` |
+| `generate_random_string` | Generate a random string. Params: `length`, `characterSet` |
 
-If you modify the proxy source, rebuild and copy it into this project before packaging the extension:
-```bash
-# From mcp-proxy
-./gradlew shadowJar
-cp build/libs/mcp-proxy-all.jar /path/to/mcp-server/libs/mcp-proxy-all.jar
+---
 
-# From mcp-server
-./gradlew embedProxyJar
-```
+## Filters
 
-### Creating / modifying tools
+`get_proxy_http_history` and `get_proxy_http_history_regex` support the following optional filter parameters. All filters can be combined.
 
-Tools are defined in `src/main/kotlin/net/portswigger/mcp/tools/Tools.kt`. To define new tools, create a new serializable
-data class with the required parameters which will come from the LLM.
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `count` | int | Number of items to return per page |
+| `offset` | int | Starting position (0 = newest when `newestFirst` is true) |
+| `newestFirst` | boolean | Return newest items first (default: `true`) |
+| `inScopeOnly` | boolean | Only return items in Burp's target scope |
+| `hosts` | string[] | Filter to specific hostnames, e.g. `["api.example.com"]` |
+| `methods` | string[] | Filter by HTTP method, e.g. `["POST", "PUT", "PATCH"]` |
+| `statusCodes` | int[] | Filter by response status code, e.g. `[200, 401, 403, 500]` |
+| `excludeExtensions` | string[] | Exclude requests by file extension, e.g. `["png", "css", "woff2"]` |
+| `mimeTypes` | string[] | Include only these MIME types (Burp enum names), e.g. `["JSON", "HTML", "SCRIPT"]` |
+| `highlightColor` | string | Filter by specific highlight colour: `RED`, `ORANGE`, `YELLOW`, `GREEN`, `CYAN`, `BLUE`, `PINK`, `MAGENTA`, `GRAY` |
+| `hasHighlight` | boolean | `true` = any highlighted item; `false` = no highlight |
+| `editedOnly` | boolean | `true` = only items modified by a match-and-replace rule |
+| `hasNotes` | boolean | `true` / `false` to filter by whether the item has an annotation note |
 
-The tool name is auto-derived from its parameters data class. A description is also needed for the LLM. You can return
-a string or a `List<ContentBlock>` to provide data back to the LLM.
+Pagination response includes a metadata header: `[Total: N | Returned: N | Offset: N | Next offset: N]`
 
-Extend the Paginated interface to add auto-pagination support.
+---
+
+## Configuration Defaults
+
+| Setting | Default |
+|---------|---------|
+| Require approval for HTTP requests | `false` |
+| Require approval for project data access | `false` |
+| Enable tools that can edit your config | `true` |
+
+> **Note:** Defaults apply to new installs. Existing Burp projects retain previously saved values — toggle the settings manually in the MCP tab if needed.
