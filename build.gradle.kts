@@ -69,7 +69,8 @@ kotlin {
         languageVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_2_4)
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
         freeCompilerArgs.addAll(
-            "-Xjsr305=strict"
+            "-Xjsr305=strict",
+            "-Xmetadata-version=2.0.0"
         )
     }
 }
