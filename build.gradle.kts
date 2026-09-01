@@ -110,7 +110,8 @@ tasks {
                     "Built-JDK" to "${System.getProperty("java.version")} (${System.getProperty("java.vendor")} ${
                         System.getProperty("java.vm.version")
                     })",
-                    "Created-By" to "Gradle ${gradle.gradleVersion}"
+                    "Created-By" to "Gradle ${gradle.gradleVersion}",
+                    "Burp-Extension-Class" to "net.portswigger.mcp.ExtensionBase"
                 )
             )
         }
