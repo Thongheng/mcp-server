@@ -45,20 +45,20 @@ fun burp.api.montoya.http.message.HttpRequestResponse.toSerializableForm(): Http
     )
 }
 
-fun ProxyHttpRequestResponse.toSerializableForm(): HttpRequestResponse {
+fun ProxyHttpRequestResponse.toSerializableForm(headersOnly: Boolean = false): HttpRequestResponse {
     return HttpRequestResponse(
-        request = request()?.toString() ?: "<no request>",
-        response = response()?.toString() ?: "<no response>",
+        request = (request()?.toString() ?: "<no request>").let { if (headersOnly) it.stripHttpBody() else it },
+        response = (response()?.toString() ?: "<no response>").let { if (headersOnly) it.stripHttpBody() else it },
         notes = annotations().notes()
     )
 }
 
-fun OrganizerItem.toSerializableForm(): OrganizerItemDetails {
+fun OrganizerItem.toSerializableForm(headersOnly: Boolean = false): OrganizerItemDetails {
     return OrganizerItemDetails(
         id = id(),
         status = status().displayName(),
-        request = request()?.toString() ?: "<no request>",
-        response = response()?.toString() ?: "<no response>",
+        request = (request()?.toString() ?: "<no request>").let { if (headersOnly) it.stripHttpBody() else it },
+        response = (response()?.toString() ?: "<no response>").let { if (headersOnly) it.stripHttpBody() else it },
         notes = annotations().notes()
     )
 }
@@ -73,6 +73,17 @@ fun ProxyWebSocketMessage.toSerializableForm(): WebSocketMessage {
                 WebSocketMessageDirection.SERVER_TO_CLIENT,
         notes = annotations().notes()
     )
+}
+
+private fun String.stripHttpBody(): String {
+    for (sep in listOf("\r\n\r\n", "\n\n")) {
+        val idx = indexOf(sep)
+        if (idx >= 0) {
+            val afterSep = idx + sep.length
+            return if (afterSep < length) substring(0, afterSep) + "<body omitted>" else this
+        }
+    }
+    return this
 }
 
 @Serializable

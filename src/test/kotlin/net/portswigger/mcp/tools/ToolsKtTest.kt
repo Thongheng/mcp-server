@@ -27,7 +27,10 @@ import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import net.portswigger.mcp.KtorServerManager
@@ -749,17 +752,17 @@ class ToolsKtTest {
             
             mockkStatic("net.portswigger.mcp.schema.SerializationKt")
             
-            every { proxyHistory[0].toSerializableForm() } returns HttpRequestResponse(
+            every { proxyHistory[0].toSerializableForm(any()) } returns HttpRequestResponse(
                 request = "GET /item1 HTTP/1.1",
                 response = "HTTP/1.1 200 OK",
                 notes = "Item 1 notes"
             )
-            every { proxyHistory[1].toSerializableForm() } returns HttpRequestResponse(
+            every { proxyHistory[1].toSerializableForm(any()) } returns HttpRequestResponse(
                 request = "GET /item2 HTTP/1.1",
                 response = "HTTP/1.1 200 OK",
                 notes = "Item 2 notes"
             )
-            every { proxyHistory[2].toSerializableForm() } returns HttpRequestResponse(
+            every { proxyHistory[2].toSerializableForm(any()) } returns HttpRequestResponse(
                 request = "GET /item3 HTTP/1.1",
                 response = "HTTP/1.1 200 OK",
                 notes = "Item 3 notes"
@@ -769,36 +772,42 @@ class ToolsKtTest {
                 val result1 = client.callTool(
                     "get_proxy_http_history", mapOf(
                         "count" to 2,
-                        "offset" to 0
+                        "offset" to 0,
+                        "newestFirst" to false
                     )
                 )
-                
+
                 delay(100)
                 val text1 = result1.expectTextContent()
                 assertTrue(text1.contains("GET /item1"))
                 assertTrue(text1.contains("GET /item2"))
                 assertFalse(text1.contains("GET /item3"))
-                
+
                 val result2 = client.callTool(
                     "get_proxy_http_history", mapOf(
                         "count" to 2,
-                        "offset" to 2
+                        "offset" to 2,
+                        "newestFirst" to false
                     )
                 )
-                
+
                 delay(100)
                 val text2 = result2.expectTextContent()
                 assertTrue(text2.contains("GET /item3"))
-                
+
                 val result3 = client.callTool(
                     "get_proxy_http_history", mapOf(
                         "count" to 2,
-                        "offset" to 3
+                        "offset" to 3,
+                        "newestFirst" to false
                     )
                 )
-                
+
                 delay(100)
-                assertEquals("Reached end of items", result3.expectTextContent())
+                val json3 = Json.parseToJsonElement(result3.expectTextContent()).jsonObject
+                assertEquals(3, json3["total"]!!.jsonPrimitive.int)
+                assertEquals(0, json3["returned"]!!.jsonPrimitive.int)
+                assertTrue(json3["items"]!!.jsonArray.isEmpty())
             }
         }
 
@@ -810,7 +819,7 @@ class ToolsKtTest {
             every { proxy.history() } returns listOf(historyItem)
 
             mockkStatic("net.portswigger.mcp.schema.SerializationKt")
-            every { historyItem.toSerializableForm() } returns HttpRequestResponse(
+            every { historyItem.toSerializableForm(any()) } returns HttpRequestResponse(
                 request = "GET / HTTP/1.1\r\nX-Long: ${"\\\"😀".repeat(2_000)}",
                 response = "HTTP/1.1 200 OK\r\n\r\n${"😀".repeat(3_000)}",
                 notes = "keep me"
@@ -820,13 +829,14 @@ class ToolsKtTest {
                 val text = client.callTool(
                     "get_proxy_http_history", mapOf("count" to 1, "offset" to 0)
                 ).expectTextContent()
-                val item = Json.parseToJsonElement(text).jsonObject
+                val envelope = Json.parseToJsonElement(text).jsonObject
+                val item = envelope["items"]!!.jsonArray[0].jsonObject
 
-                assertTrue(text.length <= 5_000)
-                assertEquals(setOf("request", "response", "notes"), item.keys)
+                assertTrue(item.keys.containsAll(setOf("request", "response", "notes", "_truncated")))
                 assertTrue(item.getValue("request").jsonPrimitive.content.endsWith("... (truncated)"))
                 assertTrue(item.getValue("response").jsonPrimitive.content.endsWith("... (truncated)"))
                 assertEquals("keep me", item.getValue("notes").jsonPrimitive.content)
+                assertEquals(true, item.getValue("_truncated").jsonPrimitive.boolean)
             }
         }
     }

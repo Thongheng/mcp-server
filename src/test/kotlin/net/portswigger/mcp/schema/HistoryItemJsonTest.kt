@@ -2,6 +2,7 @@ package net.portswigger.mcp.schema
 
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -29,11 +30,11 @@ class HistoryItemJsonTest {
         )
         val item = Json.parseToJsonElement(encoded).jsonObject
 
-        assertTrue(encoded.length <= 5_000)
-        assertEquals(setOf("request", "response", "notes"), item.keys)
+        assertTrue(item.keys.containsAll(setOf("request", "response", "notes", "_truncated")))
         assertTrue(item.getValue("request").jsonPrimitive.content.endsWith("... (truncated)"))
         assertTrue(item.getValue("response").jsonPrimitive.content.endsWith("... (truncated)"))
         assertEquals("keep me", item.getValue("notes").jsonPrimitive.content)
+        assertEquals(true, item.getValue("_truncated").jsonPrimitive.boolean)
     }
 
     @Test

@@ -9,7 +9,12 @@ import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.serialization.InternalSerializationApi
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlinx.serialization.serializer
 import net.portswigger.mcp.schema.asInputSchema
 import kotlin.experimental.ExperimentalTypeInference
@@ -99,17 +104,21 @@ inline fun <reified I : Paginated> Server.mcpPaginatedTool(
     mcpTool<I>(description, execute = {
         val all = execute(this).toList()
         val total = all.size
+        val page = if (total == 0 || offset >= total) emptyList() else all.drop(offset).take(count)
+        val nextOffset = offset + page.size
+        val hasMore = nextOffset < total
 
-        if (total == 0 || offset >= total) {
-            listOf(TextContent("No items found (total: $total)"))
-        } else {
-            val page = all.drop(offset).take(count)
-            val nextOffset = offset + page.size
-            val hasMore = nextOffset < total
-            val header = "[Total: $total | Returned: ${page.size} | Offset: $offset" +
-                (if (hasMore) " | Next offset: $nextOffset]" else " | End of results]")
-            listOf(TextContent(header + "\n\n" + page.joinToString(separator = "\n\n")))
+        val items = JsonArray(page.map { str ->
+            try { Json.parseToJsonElement(str) } catch (_: Exception) { JsonPrimitive(str) }
+        })
+        val envelope = buildJsonObject {
+            put("total", total)
+            put("returned", page.size)
+            put("offset", offset)
+            if (hasMore) put("nextOffset", nextOffset)
+            put("items", items)
         }
+        listOf(TextContent(Json.encodeToString(JsonElement.serializer(), envelope)))
     })
 }
 

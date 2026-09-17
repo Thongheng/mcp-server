@@ -45,6 +45,11 @@ class KtorServerManager(private val api: MontoyaApi) : ServerManager {
                     install(CORS) {
                         allowHost("localhost:${config.port}")
                         allowHost("127.0.0.1:${config.port}")
+                        if (config.host == "0.0.0.0" || config.host == "::") {
+                            anyHost()
+                        } else if (config.host != "localhost" && config.host != "127.0.0.1") {
+                            allowHost("${config.host}:${config.port}")
+                        }
 
                         allowMethod(HttpMethod.Get)
                         allowMethod(HttpMethod.Post)
@@ -64,7 +69,7 @@ class KtorServerManager(private val api: MontoyaApi) : ServerManager {
                         val referer = call.request.header("Referer")
                         val userAgent = call.request.header("User-Agent")
 
-                        if (origin != null && !isValidOrigin(origin)) {
+                        if (origin != null && !isValidOrigin(origin, config.host)) {
                             api.logging().logToOutput("Blocked DNS rebinding attack from origin: $origin")
                             call.respond(HttpStatusCode.Forbidden)
                             return@intercept
@@ -74,13 +79,13 @@ class KtorServerManager(private val api: MontoyaApi) : ServerManager {
                             return@intercept
                         }
 
-                        if (host != null && !isValidHost(host, config.port)) {
+                        if (host != null && !isValidHost(host, config.port, config.host)) {
                             api.logging().logToOutput("Blocked DNS rebinding attack from host: $host")
                             call.respond(HttpStatusCode.Forbidden)
                             return@intercept
                         }
 
-                        if (referer != null && !isValidReferer(referer)) {
+                        if (referer != null && !isValidReferer(referer, config.host)) {
                             api.logging().logToOutput("Blocked suspicious request from referer: $referer")
                             call.respond(HttpStatusCode.Forbidden)
                             return@intercept
@@ -92,7 +97,22 @@ class KtorServerManager(private val api: MontoyaApi) : ServerManager {
                         call.response.header("Content-Security-Policy", "default-src 'none'")
                     }
 
-                    mcp {
+                    val isAllInterfaces = config.host == "0.0.0.0" || config.host == "::"
+                    val isLocalhost = config.host == "localhost" || config.host == "127.0.0.1" || config.host == "::1"
+                    val extraHost = if (!isAllInterfaces && !isLocalhost) config.host else null
+
+                    // SDK validates allowedHosts as bare names (no IPv6 colons) and allowedOrigins as full URLs
+                    val sdkHosts = listOfNotNull("localhost", "127.0.0.1", extraHost)
+                    val sdkOrigins = listOfNotNull(
+                        "http://localhost", "http://127.0.0.1", "http://[::1]",
+                        extraHost?.let { "http://$it" }
+                    )
+
+                    mcp(
+                        enableDnsRebindingProtection = !isAllInterfaces,
+                        allowedHosts = sdkHosts,
+                        allowedOrigins = sdkOrigins
+                    ) {
                         mcpServer
                     }
 
@@ -135,12 +155,17 @@ class KtorServerManager(private val api: MontoyaApi) : ServerManager {
         executor.awaitTermination(10, TimeUnit.SECONDS)
     }
 
-    private fun isValidOrigin(origin: String): Boolean {
+    private fun isValidOrigin(origin: String, configuredHost: String): Boolean {
         try {
             val url = URI(origin).toURL()
             val hostname = url.host.lowercase().trimStart('[').trimEnd(']')
 
-            val allowedHosts = setOf("localhost", "127.0.0.1", "::1")
+            if (configuredHost == "0.0.0.0" || configuredHost == "::") return true
+
+            val allowedHosts = mutableSetOf("localhost", "127.0.0.1", "::1")
+            if (configuredHost != "localhost" && configuredHost != "127.0.0.1") {
+                allowedHosts.add(configuredHost)
+            }
 
             return hostname in allowedHosts
         } catch (_: Exception) {
@@ -159,11 +184,19 @@ class KtorServerManager(private val api: MontoyaApi) : ServerManager {
         return browserIndicators.any { userAgentLower.contains(it) }
     }
 
-    private fun isValidHost(host: String, expectedPort: Int): Boolean {
+    private fun isValidHost(host: String, expectedPort: Int, configuredHost: String): Boolean {
         try {
             val (hostname, port) = parseHostHeader(host)
 
-            val allowedHosts = setOf("localhost", "127.0.0.1", "::1")
+            if (configuredHost == "0.0.0.0" || configuredHost == "::") {
+                return port == null || port == expectedPort
+            }
+
+            val allowedHosts = mutableSetOf("localhost", "127.0.0.1", "::1")
+            if (configuredHost != "localhost" && configuredHost != "127.0.0.1") {
+                allowedHosts.add(configuredHost)
+            }
+
             if (hostname !in allowedHosts) {
                 return false
             }
@@ -194,12 +227,18 @@ class KtorServerManager(private val api: MontoyaApi) : ServerManager {
         }
     }
 
-    private fun isValidReferer(referer: String): Boolean {
+    private fun isValidReferer(referer: String, configuredHost: String): Boolean {
         try {
             val url = URI(referer).toURL()
             val hostname = url.host.lowercase().trimStart('[').trimEnd(']')
 
-            val allowedHosts = setOf("localhost", "127.0.0.1", "::1")
+            if (configuredHost == "0.0.0.0" || configuredHost == "::") return true
+
+            val allowedHosts = mutableSetOf("localhost", "127.0.0.1", "::1")
+            if (configuredHost != "localhost" && configuredHost != "127.0.0.1") {
+                allowedHosts.add(configuredHost)
+            }
+
             return hostname in allowedHosts
 
         } catch (_: Exception) {

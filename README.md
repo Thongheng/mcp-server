@@ -9,7 +9,9 @@ Integrates Burp Suite with AI clients (Claude, Cursor, etc.) using the [Model Co
 1. Build: `./gradlew embedProxyJar` → produces `build/libs/burp-mcp-all.jar`
 2. Load the JAR as a Burp extension (Extensions → Add → Java)
 3. Configure the MCP tab in Burp (host, port, approvals)
-4. Point your AI client at `http://127.0.0.1:9876/sse`
+4. Point your AI client at the SSE endpoint:
+   - Documented path: `http://127.0.0.1:9876/sse`
+   - The server also serves the SSE stream at the root: `http://127.0.0.1:9876/` (verified working — clients that connect to `/` receive `event: endpoint` with the message URL `?sessionId=<uuid>`)
 
 ---
 
@@ -38,6 +40,8 @@ Integrates Burp Suite with AI clients (Claude, Cursor, etc.) using the [Model Co
 | `get_proxy_http_history` | Return proxy HTTP history items with pagination and optional filters (see [Filters](#filters)). |
 | `get_proxy_http_history_regex` | Return proxy HTTP history items whose raw content matches a regex. Params: `regex`, `caseInsensitive` (optional), plus all filters. |
 
+> **Output format:** all history tools return a JSON object: `{"total":N,"returned":N,"offset":N,"nextOffset":N,"items":[...]}`. Use `nextOffset` to page. Items with `"_truncated":true` were cut to fit the per-item length limit — re-request with a higher `maxItemLength` to get the full content.
+
 ### WebSocket History
 
 | Tool | Description |
@@ -51,7 +55,7 @@ Integrates Burp Suite with AI clients (Claude, Cursor, etc.) using the [Model Co
 | Tool | Description |
 |------|-------------|
 | `get_organizer_count` | Return the total number of items in the Organizer tab. |
-| `get_organizer_items` | Return Organizer items with pagination and filters. Params: `count`, `offset`, `newestFirst`, `hosts`, `methods`, `statusCodes`, `highlightColor`, `hasHighlight`, `hasNotes` |
+| `get_organizer_items` | Return Organizer items with pagination and filters. Supports `hosts`, `methods`, `statusCodes`, `pathContains`, `headersOnly`, `highlightColor`, `hasHighlight`, `hasNotes`, `maxItemLength`. |
 | `get_organizer_items_regex` | Return Organizer items matching a regex. Params: `regex`, `caseInsensitive`, plus all Organizer filters. |
 
 ### Scanner *(Burp Pro only)*
@@ -105,25 +109,72 @@ Integrates Burp Suite with AI clients (Claude, Cursor, etc.) using the [Model Co
 
 ## Filters
 
-`get_proxy_http_history` and `get_proxy_http_history_regex` support the following optional filter parameters. All filters can be combined.
+`get_proxy_http_history`, `get_proxy_http_history_regex`, `get_organizer_items`, and `get_organizer_items_regex` support the following optional parameters. All can be combined.
+
+### Pagination
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `count` | int | Number of items to return per page |
-| `offset` | int | Starting position (0 = newest when `newestFirst` is true) |
+| `offset` | int | Starting position (0-based) |
 | `newestFirst` | boolean | Return newest items first (default: `true`) |
-| `inScopeOnly` | boolean | Only return items in Burp's target scope |
+
+Response is always a JSON object:
+```json
+{"total": 47, "returned": 10, "offset": 0, "nextOffset": 10, "items": [...]}
+```
+`nextOffset` is omitted when you have reached the end. Items with `"_truncated": true` were cut to fit the per-item length limit.
+
+### Filters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `inScopeOnly` | boolean | Only return items in Burp's target scope (HTTP history only) |
 | `hosts` | string[] | Filter to specific hostnames, e.g. `["api.example.com"]` |
 | `methods` | string[] | Filter by HTTP method, e.g. `["POST", "PUT", "PATCH"]` |
 | `statusCodes` | int[] | Filter by response status code, e.g. `[200, 401, 403, 500]` |
-| `excludeExtensions` | string[] | Exclude requests by file extension, e.g. `["png", "css", "woff2"]` |
+| `pathContains` | string | Substring match on URL path (case-insensitive), e.g. `"/api/v2/"` |
+| `excludeExtensions` | string[] | Exclude by file extension, e.g. `["png", "css", "woff2"]` |
 | `mimeTypes` | string[] | Include only these MIME types (Burp enum names), e.g. `["JSON", "HTML", "SCRIPT"]` |
-| `highlightColor` | string | Filter by specific highlight colour: `RED`, `ORANGE`, `YELLOW`, `GREEN`, `CYAN`, `BLUE`, `PINK`, `MAGENTA`, `GRAY` |
+| `highlightColor` | string | Filter by highlight colour: `RED`, `ORANGE`, `YELLOW`, `GREEN`, `CYAN`, `BLUE`, `PINK`, `MAGENTA`, `GRAY` |
 | `hasHighlight` | boolean | `true` = any highlighted item; `false` = no highlight |
-| `editedOnly` | boolean | `true` = only items modified by a match-and-replace rule |
-| `hasNotes` | boolean | `true` / `false` to filter by whether the item has an annotation note |
+| `editedOnly` | boolean | `true` = only items modified by a match-and-replace rule (HTTP history only) |
+| `hasNotes` | boolean | Filter by whether the item has an annotation note |
 
-Pagination response includes a metadata header: `[Total: N | Returned: N | Offset: N | Next offset: N]`
+### Output size
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `headersOnly` | boolean | Strip request/response bodies — keeps only HTTP headers. Reduces token use 5–50× for JSON API traffic. Bodies are replaced with `<body omitted>`. |
+| `maxItemLength` | int | Override the default 5 000-character per-item truncation limit. Useful for requests with large cookie jars (e.g. `50000`). |
+
+---
+
+## Security & Approvals
+
+Two approval layers gate the tools. Both prompt **inside the Burp UI** — watch for dialogs:
+
+1. **HTTP request approval** (`send_http1_request`, `send_http2_request`, Repeater/Intruder tools):
+   on the first request to any host, Burp shows:
+   `Allow Once` / `Always Allow Host` / `Always Allow Host:Port` / `Deny`.
+   "Always Allow" adds the host to the auto-approve target list (persisted in config).
+2. **Data access approval** (history/Organizer/WebSocket read tools):
+   on first read of each data type, Burp shows:
+   `Allow Once` / `Always Allow <HTTP history|WebSocket history|Organizer items>` / `Deny`.
+   Note: history items may contain sensitive data from previous web sessions.
+
+Additional gates:
+- `set_project_options` / `set_user_options` require the *Enable tools that can edit your config* checkbox in the MCP tab.
+- Collaborator tools require Burp Pro.
+
+### Request content normalization
+
+MCP clients often emit `\r\n` as the literal 4-character sequence backslash-r-backslash-n in
+JSON tool arguments instead of real CRLF bytes. The server normalizes the request **prelude**
+(request line + headers, up to the first blank line) to proper CRLF; request **bodies are
+preserved verbatim** so escape sequences inside JSON/binary bodies stay byte-exact.
+If a strict backend still rejects your request, check for duplicated headers
+(e.g. two `Content-Length` lines) — Cloudflare-class edges return 400 for that.
 
 ---
 

@@ -127,6 +127,7 @@ private fun ProxyHttpRequestResponse.matchesFilter(
     hasHighlight: Boolean?,
     editedOnly: Boolean?,
     hasNotes: Boolean?,
+    pathContains: String?,
 ): Boolean {
     if (inScopeOnly == true && !request().isInScope()) return false
     if (!hosts.isNullOrEmpty() && !hosts.any { it.equals(request().httpService().host(), ignoreCase = true) }) return false
@@ -145,6 +146,7 @@ private fun ProxyHttpRequestResponse.matchesFilter(
     if (hasHighlight != null && annotations().hasHighlightColor() != hasHighlight) return false
     if (editedOnly == true && !edited()) return false
     if (hasNotes != null && annotations().hasNotes() != hasNotes) return false
+    if (pathContains != null && !request().path().contains(pathContains, ignoreCase = true)) return false
     return true
 }
 
@@ -155,6 +157,7 @@ private fun OrganizerItem.matchesFilter(
     highlightColor: String?,
     hasHighlight: Boolean?,
     hasNotes: Boolean?,
+    pathContains: String?,
 ): Boolean {
     if (!hosts.isNullOrEmpty() && !hosts.any { it.equals(request()?.httpService()?.host(), ignoreCase = true) }) return false
     if (!methods.isNullOrEmpty() && !methods.any { it.equals(request()?.method(), ignoreCase = true) }) return false
@@ -165,6 +168,7 @@ private fun OrganizerItem.matchesFilter(
     if (highlightColor != null && !annotations().highlightColor().name.equals(highlightColor, ignoreCase = true)) return false
     if (hasHighlight != null && annotations().hasHighlightColor() != hasHighlight) return false
     if (hasNotes != null && annotations().hasNotes() != hasNotes) return false
+    if (pathContains != null && request()?.path()?.contains(pathContains, ignoreCase = true) != true) return false
     return true
 }
 
@@ -398,14 +402,16 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
     }
 
     mcpPaginatedTool<GetProxyHttpHistory>(
-        "Displays items within the proxy HTTP history. Returns newest items first by default. " +
-        "Supports filtering by: hosts (list of hostnames), methods (e.g. [\"POST\",\"PUT\"]), " +
-        "statusCodes (e.g. [200,401,403]), excludeExtensions (e.g. [\"js\",\"css\",\"png\"]), " +
-        "mimeTypes (e.g. [\"JSON\",\"HTML\"] — MimeType enum names), " +
+        "Displays items within the proxy HTTP history. Returns a JSON object with total, returned, offset, " +
+        "optional nextOffset, and an items array. Returns newest items first by default. " +
+        "Filters: hosts (hostnames), methods ([\"POST\",\"PUT\"]), statusCodes ([200,401,403]), " +
+        "excludeExtensions ([\"js\",\"css\"]), mimeTypes ([\"JSON\",\"HTML\"]), " +
+        "pathContains (substring match on URL path, e.g. \"/api/v2/\"), " +
         "highlightColor (RED/ORANGE/YELLOW/GREEN/CYAN/BLUE/PINK/MAGENTA/GRAY), " +
-        "hasHighlight (true = any highlight), editedOnly (true = modified by match-replace), " +
-        "hasNotes (true/false), inScopeOnly (true = respect Burp target scope). " +
-        "Response includes total count and next offset for pagination."
+        "hasHighlight, editedOnly, hasNotes, inScopeOnly. " +
+        "Set headersOnly=true to omit request/response bodies (saves tokens for large JSON APIs). " +
+        "Set maxItemLength to raise the 5000-char per-item truncation limit for large cookie jars. " +
+        "Items with _truncated:true were cut to fit the limit."
     ) {
         val allowed = runBlocking {
             checkDataAccessOrDeny(DataAccessType.HTTP_HISTORY, config, api, "HTTP history")
@@ -414,15 +420,15 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
 
         api.proxy().history()
             .let { list -> if (newestFirst != false) list.asReversed() else list }
-            .filter { it.matchesFilter(inScopeOnly, hosts, methods, statusCodes, excludeExtensions, mimeTypes, highlightColor, hasHighlight, editedOnly, hasNotes) }
+            .filter { it.matchesFilter(inScopeOnly, hosts, methods, statusCodes, excludeExtensions, mimeTypes, highlightColor, hasHighlight, editedOnly, hasNotes, pathContains) }
             .asSequence()
-            .map { encodeHistoryItem(it.toSerializableForm()) }
+            .map { encodeHistoryItem(it.toSerializableForm(headersOnly == true), maxItemLength) }
     }
 
     mcpPaginatedTool<GetProxyHttpHistoryRegex>(
         "Displays proxy HTTP history items whose raw content matches the given regex. " +
-        "Supports caseInsensitive flag and all filters from get_proxy_http_history. " +
-        "Returns newest items first by default."
+        "Supports caseInsensitive flag, headersOnly, pathContains, and all filters from get_proxy_http_history. " +
+        "Returns newest items first by default. Output is the same JSON envelope as get_proxy_http_history."
     ) {
         val allowed = runBlocking {
             checkDataAccessOrDeny(DataAccessType.HTTP_HISTORY, config, api, "HTTP history")
@@ -434,9 +440,9 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
 
         api.proxy().history { it.contains(compiledRegex) }
             .let { list -> if (newestFirst != false) list.asReversed() else list }
-            .filter { it.matchesFilter(inScopeOnly, hosts, methods, statusCodes, excludeExtensions, mimeTypes, highlightColor, hasHighlight, editedOnly, hasNotes) }
+            .filter { it.matchesFilter(inScopeOnly, hosts, methods, statusCodes, excludeExtensions, mimeTypes, highlightColor, hasHighlight, editedOnly, hasNotes, pathContains) }
             .asSequence()
-            .map { encodeHistoryItem(it.toSerializableForm()) }
+            .map { encodeHistoryItem(it.toSerializableForm(headersOnly == true), maxItemLength) }
     }
 
     // -----------------------------------------------------------------------
@@ -465,9 +471,9 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
 
         api.organizer().items()
             .let { list -> if (newestFirst != false) list.asReversed() else list }
-            .filter { it.matchesFilter(hosts, methods, statusCodes, highlightColor, hasHighlight, hasNotes) }
+            .filter { it.matchesFilter(hosts, methods, statusCodes, highlightColor, hasHighlight, hasNotes, pathContains) }
             .asSequence()
-            .map { encodeHistoryItem(it.toSerializableForm()) }
+            .map { encodeHistoryItem(it.toSerializableForm(headersOnly == true), maxItemLength) }
     }
 
     mcpPaginatedTool<GetOrganizerItemsRegex>(
@@ -484,9 +490,9 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
 
         api.organizer().items { it.contains(compiledRegex) }
             .let { list -> if (newestFirst != false) list.asReversed() else list }
-            .filter { it.matchesFilter(hosts, methods, statusCodes, highlightColor, hasHighlight, hasNotes) }
+            .filter { it.matchesFilter(hosts, methods, statusCodes, highlightColor, hasHighlight, hasNotes, pathContains) }
             .asSequence()
-            .map { encodeHistoryItem(it.toSerializableForm()) }
+            .map { encodeHistoryItem(it.toSerializableForm(headersOnly == true), maxItemLength) }
     }
 
     // -----------------------------------------------------------------------
@@ -519,7 +525,7 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
             .let { list -> if (newestFirst != false) list.asReversed() else list }
             .filter { it.matchesFilter(hosts, direction, highlightColor, hasHighlight, hasNotes) }
             .asSequence()
-            .map { encodeHistoryItem(it.toSerializableForm()) }
+            .map { encodeHistoryItem(it.toSerializableForm(), maxItemLength) }
     }
 
     mcpPaginatedTool<GetProxyWebsocketHistoryRegex>(
@@ -538,7 +544,7 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
             .let { list -> if (newestFirst != false) list.asReversed() else list }
             .filter { it.matchesFilter(hosts, direction, highlightColor, hasHighlight, hasNotes) }
             .asSequence()
-            .map { encodeHistoryItem(it.toSerializableForm()) }
+            .map { encodeHistoryItem(it.toSerializableForm(), maxItemLength) }
     }
 
     mcpTool<SetTaskExecutionEngineState>("Sets the state of Burp's task execution engine (paused or unpaused)") {
@@ -696,6 +702,9 @@ data class GetProxyHttpHistory(
     val hasHighlight: Boolean? = null,
     val editedOnly: Boolean? = null,
     val hasNotes: Boolean? = null,
+    val pathContains: String? = null,
+    val headersOnly: Boolean? = null,
+    val maxItemLength: Int? = null,
 ) : Paginated
 
 @Serializable
@@ -715,6 +724,9 @@ data class GetProxyHttpHistoryRegex(
     val hasHighlight: Boolean? = null,
     val editedOnly: Boolean? = null,
     val hasNotes: Boolean? = null,
+    val pathContains: String? = null,
+    val headersOnly: Boolean? = null,
+    val maxItemLength: Int? = null,
 ) : Paginated
 
 @Serializable
@@ -728,6 +740,9 @@ data class GetOrganizerItems(
     val highlightColor: String? = null,
     val hasHighlight: Boolean? = null,
     val hasNotes: Boolean? = null,
+    val pathContains: String? = null,
+    val headersOnly: Boolean? = null,
+    val maxItemLength: Int? = null,
 ) : Paginated
 
 @Serializable
@@ -743,6 +758,9 @@ data class GetOrganizerItemsRegex(
     val highlightColor: String? = null,
     val hasHighlight: Boolean? = null,
     val hasNotes: Boolean? = null,
+    val pathContains: String? = null,
+    val headersOnly: Boolean? = null,
+    val maxItemLength: Int? = null,
 ) : Paginated
 
 @Serializable
@@ -755,6 +773,7 @@ data class GetProxyWebsocketHistory(
     val highlightColor: String? = null,
     val hasHighlight: Boolean? = null,
     val hasNotes: Boolean? = null,
+    val maxItemLength: Int? = null,
 ) : Paginated
 
 @Serializable
@@ -769,6 +788,7 @@ data class GetProxyWebsocketHistoryRegex(
     val highlightColor: String? = null,
     val hasHighlight: Boolean? = null,
     val hasNotes: Boolean? = null,
+    val maxItemLength: Int? = null,
 ) : Paginated
 
 @Serializable
