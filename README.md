@@ -1,6 +1,6 @@
 # Burp Suite MCP Server
 
-Integrates Burp Suite with AI clients (Claude, Cursor, etc.) using the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). The extension runs a local MCP server inside Burp, exposing Burp's data and actions as tools that AI assistants can call directly.
+Integrates Burp Suite with AI clients (Claude, Cursor, Codex, OpenCode, etc.) using the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). The extension runs a local MCP server inside Burp, exposing Burp's data and actions as tools that AI assistants can call directly.
 
 ---
 
@@ -9,9 +9,106 @@ Integrates Burp Suite with AI clients (Claude, Cursor, etc.) using the [Model Co
 1. Build: `./gradlew embedProxyJar` → produces `build/libs/burp-mcp-all.jar`
 2. Load the JAR as a Burp extension (Extensions → Add → Java)
 3. Configure the MCP tab in Burp (host, port, approvals)
-4. Point your AI client at the SSE endpoint:
-   - Documented path: `http://127.0.0.1:9876/sse`
-   - The server also serves the SSE stream at the root: `http://127.0.0.1:9876/` (verified working — clients that connect to `/` receive `event: endpoint` with the message URL `?sessionId=<uuid>`)
+4. The MCP server listens on `http://127.0.0.1:9876` by default
+   - SSE endpoint: `http://127.0.0.1:9876/sse`
+   - The root path (`http://127.0.0.1:9876/`) also serves the SSE stream
+
+---
+
+## Client Setup
+
+Add the Burp MCP server to your AI client's configuration. The server must be running (Burp open with the extension loaded) before the client connects.
+
+### Claude Code (CLI)
+
+Add via the CLI (writes to `~/.claude.json` for user scope, or `.mcp.json` for project scope):
+
+```bash
+claude mcp add --transport http burpsuite http://127.0.0.1:9876/sse
+```
+
+Claude Code v2.1.265+ tries HTTP first and falls back to SSE automatically. On older versions use `--transport sse` explicitly.
+
+Or edit `~/.claude.json` directly:
+
+```json
+{
+  "mcpServers": {
+    "burpsuite": {
+      "type": "sse",
+      "url": "http://127.0.0.1:9876/sse"
+    }
+  }
+}
+```
+
+> **Note:** A `url` entry with no `type` is a config error in Claude Code — always include `"type": "sse"` or `"type": "http"`.
+
+### Claude Desktop
+
+Open **Settings → Developer → Edit Config** (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS, `%APPDATA%\Claude\claude_desktop_config.json` on Windows) and add:
+
+```json
+{
+  "mcpServers": {
+    "burpsuite": {
+      "url": "http://127.0.0.1:9876/sse"
+    }
+  }
+}
+```
+
+Restart Claude Desktop after saving.
+
+Alternatively, add it through the UI: **Settings → Connectors → Add custom connector** and paste `http://127.0.0.1:9876/sse`.
+
+### Cursor
+
+Edit `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project-level). Remote servers use just `url` — no `type` field:
+
+```json
+{
+  "mcpServers": {
+    "burpsuite": {
+      "url": "http://127.0.0.1:9876/sse"
+    }
+  }
+}
+```
+
+Restart Cursor or reload the MCP server list from **Settings → MCP**.
+
+### OpenCode
+
+Edit `~/.config/opencode/opencode.jsonc`:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "burpsuite": {
+      "type": "remote",
+      "url": "http://127.0.0.1:9876",
+      "enabled": true
+    }
+  }
+}
+```
+
+### Codex (OpenAI CLI)
+
+Add via the CLI (writes to `~/.codex/config.toml`):
+
+```bash
+codex mcp add burpsuite --url http://127.0.0.1:9876/sse
+```
+
+Or add manually to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.burpsuite]
+url = "http://127.0.0.1:9876/sse"
+```
 
 ---
 
